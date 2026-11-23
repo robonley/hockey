@@ -1,0 +1,4 @@
+u11-albert https://ical-cdn.teamsnap.com/team_schedule/4ce98765-8157-4a19-8f2e-9a29a7373ccc.ics
+hawks-rep https://ochl.ca/webcal.ashx?IDs=2736&HG=60&AG=60&PR=60&EV=60
+u9-rossland https://ical-cdn.teamsnap.com/team_schedule/99291aa8-5635-4cc0-a5d3-c13ce81297a5.ics
+u7-king https://ical-cdn.teamsnap.com/team_schedule/66d11c6e-357a-4390-b334-b06ffbe49f70.ics

@@ -1,0 +1,33 @@
+name: Refresh calendars
+
+on:
+  schedule:
+    - cron: "17 */4 * * *"   # every 4 hours
+  workflow_dispatch:          # "Run workflow" button for a manual refresh
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download calendar feeds
+        run: |
+          while read -r name url; do
+            [ -z "$name" ] && continue
+            url="${url/#webcal:/https:}"
+            # keep the old copy if a feed is temporarily down
+            curl -fsSL --retry 2 "$url" -o "calendars/$name.tmp" && grep -q BEGIN:VCALENDAR "calendars/$name.tmp" \
+              && mv "calendars/$name.tmp" "calendars/$name.ics" || { echo "::warning::$name failed"; rm -f "calendars/$name.tmp"; }
+          done < calendars/feeds.txt
+      - name: Commit if changed
+        run: |
+          git config user.name "calendar-bot"
+          git config user.email "calendar-bot@users.noreply.github.com"
+          git add calendars
+          if ! git diff --cached --quiet; then
+            git commit -m "Refresh calendars"
+            git push
+          fi

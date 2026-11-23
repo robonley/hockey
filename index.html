@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hockey Schedule</title>
+<style>
+  :root {
+    --bg: #f4f6f9; --card: #fff; --ink: #1b2430; --muted: #6b7684; --line: #e3e7ed;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #11161d; --card: #1a212b; --ink: #e8edf3; --muted: #93a0af; --line: #2a3340; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--ink); }
+  header { padding: 20px 16px 8px; max-width: 720px; margin: 0 auto; }
+  h1 { margin: 0 0 12px; font-size: 24px; }
+  .chips, .toggles { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+  .chip { border: 2px solid var(--c); background: var(--c); color: #fff; border-radius: 999px; padding: 6px 12px; font-weight: 600; font-size: 14px; cursor: pointer; }
+  .chip.off { background: transparent; color: var(--c); }
+  .toggles label { font-size: 14px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  main { max-width: 720px; margin: 0 auto; padding: 0 16px 40px; }
+  .week { background: var(--card); border: 1px solid var(--line); border-radius: 14px; margin: 14px 0; overflow: hidden; }
+  .week h2 { margin: 0; padding: 12px 16px; font-size: 17px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: baseline; }
+  .week h2 small { color: var(--muted); font-weight: 500; font-size: 13px; }
+  .week.this h2 { background: rgba(37, 99, 235, .1); }
+  .day { padding: 8px 16px 4px; font-size: 13px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .ev { display: flex; gap: 12px; padding: 8px 16px 10px; align-items: flex-start; }
+  .ev.weekday { opacity: .7; }
+  .time { min-width: 72px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .bar { width: 4px; align-self: stretch; border-radius: 2px; background: var(--c); }
+  .info { flex: 1; min-width: 0; }
+  .team { font-size: 12px; font-weight: 700; color: var(--c); text-transform: uppercase; }
+  .what { font-weight: 600; }
+  .game .what::before { content: "🏒 "; }
+  .isrep .bar { background: repeating-linear-gradient(var(--c) 0 6px, transparent 6px 9px); }
+  .rep { background: var(--c); color: #fff; border-radius: 4px; padding: 1px 5px; font-size: 10px; letter-spacing: .05em; margin-left: 4px; vertical-align: 1px; }
+  .res { font-size: 12px; font-weight: 700; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; margin-left: 4px; }
+  .meta { font-size: 13px; color: var(--muted); }
+  .meta a { color: inherit; }
+  .empty { text-align: center; color: var(--muted); padding: 40px 0; }
+  footer { text-align: center; color: var(--muted); font-size: 12px; padding-bottom: 30px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🏒 Hockey Schedule</h1>
+  <div class="chips" id="chips"></div>
+  <div class="toggles">
+    <label><input type="checkbox" id="weekendsOnly"> Weekends only</label>
+    <label><input type="checkbox" id="showPast"> Show past weeks</label>
+  </div>
+</header>
+<main id="list"><p class="empty">Loading…</p></main>
+<footer id="foot"></footer>
+
+<script>
+// ===== Edit team names / colours here =====
+const TEAMS = [
+  // Same name = same kid (shares a colour and a filter button). rep: true adds a REP badge.
+  { name: "Charlie", team: "U11 Albert", file: "calendars/u11-albert.ics",  color: "#2563eb" },
+  { name: "Charlie", team: "Hawks Rep",  file: "calendars/hawks-rep.ics",   color: "#2563eb", rep: true },
+  { name: "Harry",   team: "U9 Rossland", file: "calendars/u9-rossland.ics", color: "#dc2626" },
+  { name: "Max",     team: "U7 King",     file: "calendars/u7-king.ics",     color: "#16a34a" },
+];
+// ==========================================
+
+const DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+function parseICS(text) {
+  const lines = text.replace(/\r\n[ \t]/g, "").replace(/\n[ \t]/g, "").split(/\r?\n/);
+  const events = []; let ev = null, nested = 0;
+  for (const line of lines) {
+    if (line === "BEGIN:VEVENT") { ev = {}; nested = 0; }
+    else if (line === "END:VEVENT") { if (ev) events.push(ev); ev = null; }
+    else if (ev && line.startsWith("BEGIN:")) nested++;   // skip VALARM etc.
+    else if (ev && line.startsWith("END:")) nested--;
+    else if (ev && !nested) {
+      const i = line.indexOf(":"); if (i < 0) continue;
+      const key = line.slice(0, i).split(";")[0];
+      ev[key] = line.slice(i + 1).replace(/\\n/g, "\n").replace(/\\([,;\\])/g, "$1");
+      if (key === "DTSTART") ev.allDay = /VALUE=DATE(?!-)/.test(line.slice(0, i));
+    }
+  }
+  return events;
+}
+
+// TeamSnap publishes Eastern wall-clock times; OCHL publishes UTC ("Z"), converted to Toronto time.
+function toDate(v) {
+  const m = v && v.match(/(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})\d{2}(Z)?)?/);
+  if (!m) return null;
+  if (m[6]) {
+    const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: "America/Toronto", hourCycle: "h23",
+      year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric" })
+      .formatToParts(new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]))).map(x => [x.type, x.value]));
+    return new Date(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute);
+  }
+  return new Date(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0));
+}
+
+function cleanTitle(summary, t) {
+  let s = (summary || "")
+    .replace(/^Select - .*? - U\d+ - [^-]+ - /i, "")          // OCHL prefix
+    .replace(/^\d{4}\s+U\d+\s*-\s*\S+\s*-?\s*/i, "")            // TeamSnap prefix
+    .replace(/\[[^\]]*\]?/g, "").replace(/\(U\d+\)/g, "")       // league codes
+    .replace(/\b\d{4}\s+U\d+\s*-\s*/g, "").replace(/ @ /g, " at ");
+  const result = (s.match(/\(([WLT] [\d-]+)\)/) || [])[1];
+  s = s.replace(/\([WLT] [\d-]+\)/, "").replace(/\s+/g, " ").replace(/^-\s*/, "").trim();
+  return { what: s || "Event", result };
+}
+const fmtTime = d => d.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }).replace(/\./g, "").toUpperCase();
+const fmtDay = d => `${DAYS[d.getDay()]} ${MONTHS[d.getMonth()]} ${d.getDate()}`;
+const esc = s => String(s || "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function saturdayOf(d) { // weeks run Mon to Sun, keyed by their Saturday
+  const s = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const offset = (6 - s.getDay() + 7) % 7 - (s.getDay() === 0 ? 7 : 0);
+  s.setDate(s.getDate() + offset);
+  return s;
+}
+
+let all = [];
+const hidden = new Set();
+
+async function load() {
+  const results = await Promise.all(TEAMS.map(async t => {
+    try {
+      const r = await fetch(t.file, { cache: "no-cache" });
+      if (!r.ok) throw new Error(r.status);
+      return parseICS(await r.text()).map(e => {
+        const start = toDate(e.DTSTART);
+        const desc = e.DESCRIPTION || "";
+        const rink = (desc.match(/Location:\s*([^\n]+)/) || [])[1] || e.LOCATION;
+        const arrive = (desc.match(/Arrival Time:\s*([\d:]+\s*[AP]M)/i) || [])[1];
+        const mapUrl = (desc.match(/MAP:\s*(https?:\/\/\S+)/) || [])[1];
+        const { what, result } = cleanTitle(e.SUMMARY, t);
+        const q = rink === e.LOCATION ? `${e.LOCATION} arena Ontario` : e.LOCATION;
+        return { team: t, start, what, result, allDay: e.allDay, rink: rink && rink.trim(),
+                 arrive: arrive && arrive.replace(/\s+/, " "),
+                 map: mapUrl || (e.LOCATION ? "https://maps.google.com/?q=" + encodeURIComponent(q) : ""),
+                 game: /game|tournament|meltdown|bender|vs |at /i.test(what) };
+      }).filter(e => e.start);
+    } catch (err) { console.warn("Could not load", t.file, err); return []; }
+  }));
+  all = results.flat().sort((a, b) => a.start - b.start);
+  render();
+}
+
+function render() {
+  const weekendsOnly = document.getElementById("weekendsOnly").checked;
+  const showPast = document.getElementById("showPast").checked;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const thisSat = saturdayOf(today).getTime();
+
+  const weeks = new Map();
+  for (const e of all) {
+    if (hidden.has(e.team.name)) continue;
+    const wkend = [0, 6].includes(e.start.getDay());
+    if (weekendsOnly && !wkend) continue;
+    const key = saturdayOf(e.start).getTime();
+    if (!showPast && key < thisSat) continue;
+    if (!weeks.has(key)) weeks.set(key, []);
+    weeks.get(key).push(e);
+  }
+
+  const list = document.getElementById("list");
+  if (!weeks.size) { list.innerHTML = '<p class="empty">Nothing scheduled.</p>'; return; }
+
+  list.innerHTML = [...weeks].map(([key, evs]) => {
+    const sat = new Date(key), sun = new Date(key); sun.setDate(sun.getDate() + 1);
+    const title = sat.getMonth() === sun.getMonth()
+      ? `${MONTHS[sat.getMonth()]} ${sat.getDate()}–${sun.getDate()}`
+      : `${MONTHS[sat.getMonth()]} ${sat.getDate()} – ${MONTHS[sun.getMonth()]} ${sun.getDate()}`;
+    const games = evs.filter(e => e.game).length;
+    let lastDay = "", rows = "";
+    for (const e of evs) {
+      const day = fmtDay(e.start);
+      if (day !== lastDay) { rows += `<div class="day">${day}</div>`; lastDay = day; }
+      const wkday = ![0, 6].includes(e.start.getDay());
+      const map = e.map ? ` · <a href="${esc(e.map)}" target="_blank" rel="noopener">map</a>` : "";
+      const rep = e.team.rep ? ' <span class="rep">REP</span>' : "";
+      const res = e.result ? ` <span class="res">${esc(e.result)}</span>` : "";
+      rows += `<div class="ev ${wkday ? "weekday" : ""} ${e.game ? "game" : ""} ${e.team.rep ? "isrep" : ""}" style="--c:${e.team.color}">
+        <div class="time">${e.allDay ? "All day" : fmtTime(e.start)}</div><div class="bar"></div>
+        <div class="info"><div class="team">${esc(e.team.name)} · ${esc(e.team.team)}${rep}</div><div class="what">${esc(e.what)}${res}</div>
+        <div class="meta">${esc(e.rink || "")}${e.arrive ? ` · arrive ${esc(e.arrive)}` : ""}${map}</div></div></div>`;
+    }
+    return `<section class="week ${key === thisSat ? "this" : ""}">
+      <h2>${key === thisSat ? "This weekend · " : ""}${title}<small>${evs.length} event${evs.length > 1 ? "s" : ""}${games ? ` · ${games} game${games > 1 ? "s" : ""}` : ""}</small></h2>${rows}</section>`;
+  }).join("");
+}
+
+const kids = [...new Map(TEAMS.map(t => [t.name, t])).values()];
+document.getElementById("chips").innerHTML = kids.map(t =>
+  `<button class="chip" style="--c:${t.color}" data-team="${esc(t.name)}">${esc(t.name)}</button>`).join("");
+document.getElementById("chips").addEventListener("click", e => {
+  const b = e.target.closest(".chip"); if (!b) return;
+  const n = b.dataset.team; hidden.has(n) ? hidden.delete(n) : hidden.add(n);
+  b.classList.toggle("off"); render();
+});
+document.getElementById("weekendsOnly").addEventListener("change", render);
+document.getElementById("showPast").addEventListener("change", render);
+document.getElementById("foot").textContent = "Weeks run Monday to Sunday. Weeknight events are faded.";
+load();
+</script>
+</body>
+</html>
