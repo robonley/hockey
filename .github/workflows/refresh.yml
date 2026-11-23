@@ -22,6 +22,8 @@ jobs:
             curl -fsSL --retry 2 "$url" -o "calendars/$name.tmp" && grep -q BEGIN:VCALENDAR "calendars/$name.tmp" \
               && mv "calendars/$name.tmp" "calendars/$name.ics" || { echo "::warning::$name failed"; rm -f "calendars/$name.tmp"; }
           done < calendars/feeds.txt
+      - name: Update team records
+        run: python3 scripts/records.py
       - name: Commit if changed
         run: |
           git config user.name "calendar-bot"
